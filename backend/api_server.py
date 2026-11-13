@@ -33,7 +33,7 @@ try:
 except ImportError:
     pass
 
-from test_backend_integration import RAGGenerator, GenerationConfig, SYSTEM_PROMPT
+from rag_generate import RAGGenerator, GenerationConfig, SYSTEM_PROMPT
 
 
 # Global instances
@@ -54,10 +54,8 @@ async def lifespan(app: FastAPI):
     print("="*60)
     
     config = GenerationConfig(
-        llm_provider="openai",
         retrieval_top_k=8,
         refine_query=True,
-        use_reranker=True
     )
     
     rag_generator = RAGGenerator(config)
@@ -104,6 +102,13 @@ class QueryResponse(BaseModel):
 
 
 # API Endpoints
+@app.get("/", include_in_schema=False)
+async def root():
+    """The UI is the separate Next.js app (http://localhost:3000); send visitors to the API docs."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/docs")
+
+
 @app.get("/health")
 async def health():
     """Health check."""
@@ -121,7 +126,7 @@ async def api_info():
         "service": "SIGGRAPH 2025 RAG API",
         "version": "1.0.0",
         "endpoints": {
-            "GET /": "Frontend UI",
+            "GET /": "Redirects to /docs (UI runs separately on :3000)",
             "GET /health": "Health check",
             "POST /api/query": "Query endpoint"
         }
@@ -202,11 +207,11 @@ async def stream_rag_response(
                 })
         
         # Stage 2: Searching
-        yield emit("progress", {"message": "Searching 11,008 paper chunks...", "stage": "searching"})
+        yield emit("progress", {"message": f"Searching {len(rag_generator.retrieval.chunks):,} paper chunks...", "stage": "searching"})
         
         results = await loop.run_in_executor(
             None,
-            lambda: rag_generator.retrieval.retrieve(refined, top_k=top_k)
+            lambda: rag_generator.retrieval.retrieve(refined, top_k=top_k, use_reranker=use_reranker)
         )
         
         if not results:
@@ -251,7 +256,7 @@ IMPORTANT: You have been provided with {len(results)} paper excerpts. Make sure 
         }
         
         payload = {
-            "model": f"openai/{rag_generator.config.llm_model}",
+            "model": rag_generator.config.llm_model,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_message}
@@ -265,8 +270,11 @@ IMPORTANT: You have been provided with {len(results)} paper excerpts. Make sure 
             f"{rag_generator.openrouter_base_url}/chat/completions",
             headers=headers,
             json=payload,
-            stream=True
+            stream=True,
+            timeout=120
         )
+        if response.status_code != 200:
+            raise RuntimeError(f"OpenRouter error ({response.status_code}): {response.text[:300]}")
         
         answer_chunks = []
         for line in response.iter_lines():
@@ -291,7 +299,7 @@ IMPORTANT: You have been provided with {len(results)} paper excerpts. Make sure 
         processing_time = time.time() - start_time
         yield emit("complete", {
             "answer": answer,
-            "sources": list(sources_metadata.values()),
+            "sources": sources_metadata,
             "refined_query": refined if refined != query else None,
             "processing_time": processing_time
         })
@@ -445,7 +453,7 @@ IMPORTANT: You have been provided with {len(results)} paper excerpts. Make sure 
         }
         
         payload = {
-            "model": f"openai/{rag_generator.config.llm_model}",
+            "model": rag_generator.config.llm_model,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_message}
@@ -459,8 +467,11 @@ IMPORTANT: You have been provided with {len(results)} paper excerpts. Make sure 
             f"{rag_generator.openrouter_base_url}/chat/completions",
             headers=headers,
             json=payload,
-            stream=True
+            stream=True,
+            timeout=120
         )
+        if response.status_code != 200:
+            raise RuntimeError(f"OpenRouter error ({response.status_code}): {response.text[:300]}")
         
         answer_chunks = []
         for line in response.iter_lines():
@@ -489,7 +500,7 @@ IMPORTANT: You have been provided with {len(results)} paper excerpts. Make sure 
         await websocket.send_json({
             "type": "complete",
             "answer": answer,
-            "sources": list(sources_metadata.values()),
+            "sources": sources_metadata,
             "refined_query": refined if refined != query else None,
             "processing_time": processing_time
         })
@@ -522,12 +533,12 @@ if __name__ == "__main__":
 ║  Starting server on http://0.0.0.0:{port}                     ║
 ║                                                                ║
 ║  Endpoints:                                                    ║
-║    • GET  /              - Frontend UI                         ║
+║    • GET  /              - Redirects to /docs                  ║
 ║    • GET  /docs          - API Documentation                   ║
 ║    • POST /api/query     - Query endpoint                      ║
 ║    • WS  /ws/query       - WebSocket streaming                 ║
 ║                                                                ║
-║  Frontend files: ./frontend/                                   ║
+║  Frontend UI: run `npm run dev` in ../frontend (port 3000)     ║
 ║                                                                ║
 ╚════════════════════════════════════════════════════════════════╝
 """)
