@@ -564,8 +564,12 @@ class RetrievalPipeline:
         else:
             candidates = self.semantic_search(query)
 
+        # USE_RERANKER in .env / Render is the master switch: when it is false,
+        # reranking stays off even if a request asks for it.
         if use_reranker is None:
             use_reranker = self.config.use_reranker
+        else:
+            use_reranker = use_reranker and self.config.use_reranker
         if use_reranker and candidates:
             reranked = self.rerank(query, candidates, top_k=min(top_k * 2, len(candidates)))
         else:
