@@ -2,6 +2,77 @@
 
 A full-stack Retrieval-Augmented Generation (RAG) application for searching and querying SIGGRAPH 2025 research papers. This project combines a Next.js frontend with a FastAPI backend to provide an intelligent search interface powered by AI.
 
+## ✅ My Implementation (Ranjan)
+
+### Live Demo
+
+| Part | URL |
+|------|-----|
+| Frontend (Vercel) | https://siggraph-rag-tau.vercel.app |
+| Backend API (Render) | https://siggraph-rag-backend-or6v.onrender.com |
+| API docs (Swagger) | https://siggraph-rag-backend-or6v.onrender.com/docs |
+| Health check | https://siggraph-rag-backend-or6v.onrender.com/health |
+
+> The backend is on Render's free tier, so the first request after 15 minutes of inactivity can take ~30–60 seconds while it wakes up.
+
+### What I Implemented
+
+**Step 1 – Vectors in Qdrant (Option 1a).** Uploaded all 11,008 chunks with the pre-computed `BAAI/bge-large-en-v1.5` embeddings (1024 dims, cosine distance) to the `siggraph2025_papers` collection using `upload_from_npz.py`.
+
+**Step 2 – `backend/retrieval_pipeline.py` (hybrid search):**
+- `OpenRouterEmbedder` embeds the user query with `baai/bge-large-en-v1.5` via OpenRouter, the same model used for the stored vectors.
+- `BM25Index` builds a local keyword index over all chunks (lowercase alphanumeric tokens, `rank_bm25.BM25Okapi`).
+- `hybrid_search()` runs semantic search (Qdrant, top 30) and BM25 (top 30), normalises each score set by its maximum, and merges them per chunk: `0.7 × semantic + 0.3 × BM25`.
+- `rerank()` reorders candidates with Cohere `rerank-english-v3.0`; if the key is missing or the call fails, it falls back to the hybrid order.
+- `retrieve()` returns the top-k results as `RetrievalResult` objects. Missing links stored as the string `"None"` in `chunks.json` are converted to real nulls so the UI doesn't show broken links.
+
+**Step 3 – `backend/rag_generate.py` (generation):**
+- `refine_query()` rewrites the question into a focused search query with `openai/gpt-4o-mini` (falls back to the original query on any error).
+- `_format_context()` formats each chunk as a numbered source with title, authors, section and text.
+- `_build_sources_metadata()` de-duplicates sources by paper title for the citation list.
+- `_call_llm()` / `generate()` produce the final answer with `openai/gpt-4o`, citing papers inline as `[Paper Title]`.
+
+**Step 4 – `backend/api_server.py`:** switched the import from the mock (`test_backend_integration`) to `rag_generate`, and fixed a few integration issues:
+- The OpenRouter model name was being prefixed twice (`openai/openai/gpt-4o`).
+- The streaming and WebSocket endpoints called `.values()` on the sources list.
+- OpenRouter errors are now reported to the client instead of returning an empty answer.
+- `GET /` now redirects to `/docs` (the UI is the separate Next.js app).
+
+### Configuration
+
+Backend environment variables are documented in [`backend/.env.example`](backend/.env.example):
+
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `OPENROUTER_API_KEY` | Yes | Embeddings, query refinement and answer generation |
+| `QDRANT_URL`, `QDRANT_API_KEY` | Yes | Vector database |
+| `COHERE_API_KEY` | No | Reranking |
+| `USE_RERANKER` | No | Master switch for reranking (default `true`; the deployed backend uses `false`) |
+
+The frontend needs `NEXT_PUBLIC_API_URL` set to the backend URL (in `frontend/.env.local` locally, and in Vercel's environment variables for production).
+
+### Notes and Issues I Hit
+- `openai/gpt-3.5-turbo` (suggested in the tips below) is no longer served on OpenRouter, so query refinement uses `openai/gpt-4o-mini`.
+- The `.npz` embeddings file is not in the repo (it's git-ignored); download it from the Drive link to re-run the upload.
+- Ran `npm audit fix` in the frontend (non-breaking updates, including the critical Next.js patch). The remaining advisories need major-version upgrades (Next 16, KaTeX 0.19) and only affect build/lint tooling, so I left them.
+
+### Run Locally
+```bash
+# Backend (terminal 1)
+cd backend
+python -m venv venv && venv\Scripts\activate   # Windows
+pip install -r requirements.txt
+cp .env.example .env                            # fill in your keys
+python api_server.py                            # http://localhost:8082
+
+# Frontend (terminal 2)
+cd frontend
+npm install
+npm run dev                                     # http://localhost:3000
+```
+
+---
+
 ## 🎯 Project Overview
 
 Build a production-ready RAG application that allows users to:
@@ -783,7 +854,7 @@ Before submitting your project, ensure:
 - [ ] Code is well-documented with comments
 - [ ] Environment variables are documented in `.env.example`
 - [ ] `.gitignore` excludes sensitive files
-- [ ] README is updated with your implementation notes
+- [x] README is updated with your implementation notes
 - [ ] Backend is deployed to Render (or alternative)
 - [ ] Frontend is deployed to Vercel (or alternative)
 - [ ] Deployed app is fully functional
